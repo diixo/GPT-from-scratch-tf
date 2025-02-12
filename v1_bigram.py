@@ -9,7 +9,7 @@ batch_size = 32 # how many independent sequences will we process in parallel?
 block_size = 8 # what is the maximum context length for predictions?
 max_iters = 3000
 eval_interval = 300
-learning_rate = 1e-3
+learning_rate = 1e-2
 eval_iters = 200
 # ------------
 
@@ -49,15 +49,14 @@ def get_batch(split):
 
 def estimate_loss(model: Model):
     out = {}
-    model.eval()
     for split in ['train', 'val']:
         losses = np.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y = get_batch(split)
+            # Передаем training=False для режима оценки (без dropout, batch norm и т.п.)
             logits, loss = model(X, Y)
-            losses[k] = loss.item()
+            losses[k] = loss.numpy()  # Получаем числовое значение из тензора
         out[split] = losses.mean()
-    model.train()
     return out
 
 
@@ -83,24 +82,48 @@ class BigramLanguageModel(tf.keras.Model):
         return logits, loss
 
 
+    def generate(self, idx, max_new_tokens):
+        # idx — это (B, T) тензор с индексами текущего контекста
+        for _ in range(max_new_tokens):
+            # Получаем предсказания: logits имеет форму (B, T, C)
+            logits, _ = self(idx)
+            # Берем логиты только последнего временного шага: (B, C)
+            logits = logits[:, -1, :]
+            # Применяем softmax для получения вероятностей
+            probs = tf.nn.softmax(logits, axis=-1)  # (B, C)
+            # Сэмплируем следующий токен из распределения вероятностей.
+            # tf.random.categorical принимает логиты, поэтому применяем log(probs)
+            idx_next = tf.random.categorical(tf.math.log(probs), num_samples=1)  # (B, 1)
+            # Добавляем сэмплированный токен к последовательности
+            idx = tf.concat([idx, idx_next], axis=1)  # (B, T+1)
+        return idx
 
-def train():
-    model = BigramLanguageModel(vocab_size)
 
-    optimizer=tf.keras.optimizers.Adam(learning_rate)
+def train(model):
 
+    optimizer = tf.keras.optimizers.Adam(learning_rate)
+    
     for iter in range(max_iters):
 
-        # every once in a while evaluate the loss on train and val sets
         if iter % eval_interval == 0:
-            losses = estimate_loss()
+            losses = estimate_loss(model)
             print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-
-        # sample a batch of data
+        
         xb, yb = get_batch('train')
 
-        # evaluate the loss
-        logits, loss = model(xb, yb)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
+        # Обучаем модель
+        with tf.GradientTape() as tape:
+            logits, loss = model(xb, yb)
+        
+        grads = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+
+model = BigramLanguageModel(vocab_size)
+
+train(model)
+
+context = np.zeros((1, 1), dtype=np.int64)
+idxs = model.generate(context, max_new_tokens=500)
+print(decode(idxs[0].numpy()))
+
