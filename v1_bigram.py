@@ -83,7 +83,24 @@ class BigramLanguageModel(tf.keras.Model):
         return logits, loss
 
 
-model = BigramLanguageModel(vocab_size)
 
-optimizer=tf.keras.optimizers.Adam(learning_rate)
+def train():
+    model = BigramLanguageModel(vocab_size)
 
+    optimizer=tf.keras.optimizers.Adam(learning_rate)
+
+    for iter in range(max_iters):
+
+        # every once in a while evaluate the loss on train and val sets
+        if iter % eval_interval == 0:
+            losses = estimate_loss()
+            print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
+        # sample a batch of data
+        xb, yb = get_batch('train')
+
+        # evaluate the loss
+        logits, loss = model(xb, yb)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
